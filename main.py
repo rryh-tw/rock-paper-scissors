@@ -6,9 +6,10 @@ from itertools import count
 import os
 import sys
 import time
+import random
 
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
 
 from PySide6.QtWidgets import (QApplication, QComboBox, QGroupBox,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QGroupBox,
 result_text = ""
 def callback(result: vision.GestureRecognizerResult, img: mp.Image, timestamp: int):
     global result_text
-    result_text = f"{timestamp} {result.gestures[0][0].category_name}" if result.gestures else f"{timestamp}"
+    result_text = result.gestures[0][0].category_name if result.gestures else "None"
 
 
 
@@ -31,24 +32,15 @@ options = vision.GestureRecognizerOptions(
     result_callback=callback)
 recognizer = vision.GestureRecognizer.create_from_options(options)
     
-
-
-
-# -------------------------------
 class Thread(QThread):
     updateFrame = Signal(QImage)
     def __init__(self, parent=None):
         QThread.__init__(self, parent)
-        self.trained_file = None
         self.status = True
         self.cap = True
 
-    def set_file(self, fname):
-        # The data comes with the 'opencv-python' module
-        self.trained_file = os.path.join(cv2.data.haarcascades, fname)
 
     def run(self):
-
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1920)
@@ -60,7 +52,6 @@ class Thread(QThread):
 
             frame = cv2.flip(frame, 1)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-            print(mp_image)
             recognizer.recognize_async(mp_image, timestamp)
             cv2.putText(frame, result_text, (10, 40), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 255, 255), 1, cv2.LINE_AA)
             # Reading the image in RGB to display it
@@ -75,6 +66,18 @@ class Thread(QThread):
             self.updateFrame.emit(scaled_img)
         sys.exit(-1)
 
+class Game:
+    def __init__(self):
+        self.avaiable_types = ["Victory", "Closed_Fist", "Open_Palm"]
+    
+    def compare_winning(self, computer_index, player_index):
+        if computer_index == player_index:
+            return "tie"
+        elif computer_index == (player_index + 1) % 3:
+            return "computer win"
+        else:
+            return "you win"
+
 
 class Window(QMainWindow):
     def __init__(self):
@@ -83,26 +86,22 @@ class Window(QMainWindow):
         self.setWindowTitle("Patterns detection")
         self.setGeometry(0, 0, 800, 500)
 
-        # Main menu bar
-        self.menu = self.menuBar()
-        self.menu_file = self.menu.addMenu("File")
-        exit = QAction("Exit", self, triggered=qApp.quit)
-        self.menu_file.addAction(exit)
-
-        self.menu_about = self.menu.addMenu("&About")
-        about = QAction("About Qt", self, shortcut=QKeySequence(QKeySequence.HelpContents),
-                        triggered=qApp.aboutQt)
-        self.menu_about.addAction(about)
-
         # Create a label for the display camera
         self.label = QLabel(self)
         self.label.setFixedSize(640, 480)
+
+        # Computer label for the display of computer gesture
+        self.computer_image_label = QLabel(self)
+        self.computer_image_label.setFixedSize(378, 503)
+
+        image_layout = QHBoxLayout()
+        image_layout.addWidget(self.label)
+        image_layout.addWidget(self.computer_image_label)
 
         # Thread in charge of updating the image
         self.th = Thread(self)
         self.th.finished.connect(self.close)
         self.th.updateFrame.connect(self.setImage)
-
 
         # Buttons layout
         buttons_layout = QHBoxLayout()
@@ -114,12 +113,11 @@ class Window(QMainWindow):
         buttons_layout.addWidget(self.button1)
 
         right_layout = QHBoxLayout()
-        # right_layout.addWidget(self.group_model, 1)
         right_layout.addLayout(buttons_layout, 1)
 
         # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(self.label)
+        layout.addLayout(image_layout)
         layout.addLayout(right_layout)
 
         # Central widget
@@ -136,9 +134,40 @@ class Window(QMainWindow):
         self.text = QLabel("result: ")
         layout.addWidget(self.text, alignment=Qt.AlignmentFlag.AlignCenter)
 
-    @Slot()
-    def set_model(self, text):
-        self.th.set_file(text)
+        self.mylabel = QLabel('timer', self)
+        self.mylabel.move(60, 50)
+        layout.addWidget(self.mylabel, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # timer
+        self.counter = 5
+
+        self.mytimer = QTimer(self)
+        self.mytimer.timeout.connect(self.onTimer)
+        self.mytimer.start(1000)
+
+        # win/lose state
+        self.WinnerStateText = QLabel("comparing")
+        layout.addWidget(self.WinnerStateText, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        
+
+    def onTimer(self):
+        self.counter -= 1
+        self.mylabel.setText(str(self.counter))
+        if self.counter == 0:
+            self.counter = 5
+            computer_index = random.randint(0, 2)
+            img = QImage(f"computer_gesture/{computer_index}.HEIC")
+            scaled_img = img.scaled(640, 480, Qt.KeepAspectRatio)
+
+            # Set the QPixmap object as the image for the QLabel
+            self.computer_image_label.setPixmap(QPixmap.fromImage(scaled_img))
+
+            if result_text in Game().avaiable_types:
+                player_index = Game().avaiable_types.index(result_text)
+                self.WinnerStateText.setText(Game().compare_winning(computer_index=computer_index, player_index=player_index))
+            else:
+                self.WinnerStateText.setText("Wrong Gesture")
 
     @Slot()
     def kill_thread(self):
@@ -163,10 +192,9 @@ class Window(QMainWindow):
     @Slot(QImage)
     def setImage(self, image):
         self.label.setPixmap(QPixmap.fromImage(image))
-    
-    @Slot(QLabel)
-    def setResultText(self):
         self.text.setText(result_text)
+    
+
 
 
 if __name__ == "__main__":
