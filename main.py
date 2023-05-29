@@ -1,204 +1,151 @@
+import random as rd
 import cv2
 import mediapipe as mp
 from mediapipe import tasks
 from mediapipe.tasks.python import vision
 from itertools import count
-import os
-import sys
-import time
-import random
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QApplication, QHBoxLayout,QLabel,  QMainWindow,
+    QPushButton, QVBoxLayout, QWidget
+    )
 
-
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
-from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
-
-from PySide6.QtWidgets import (QApplication, QComboBox, QGroupBox,
-                               QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                               QSizePolicy, QVBoxLayout, QWidget)
-
-
-
-
-result_text = ""
-def callback(result: vision.GestureRecognizerResult, img: mp.Image, timestamp: int):
-    global result_text
-    result_text = result.gestures[0][0].category_name if result.gestures else "None"
-
-
-
-options = vision.GestureRecognizerOptions(
-    base_options=tasks.BaseOptions(model_asset_path='gesture_recognizer.task'),
-    running_mode=vision.RunningMode.LIVE_STREAM,
-    result_callback=callback)
-recognizer = vision.GestureRecognizer.create_from_options(options)
-    
 class Thread(QThread):
-    updateFrame = Signal(QImage)
-    def __init__(self, parent=None):
-        QThread.__init__(self, parent)
-        self.status = True
-        self.cap = True
+    signal = Signal(QImage, str)
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.text = ""
+        options = vision.GestureRecognizerOptions(
+            base_options=tasks.BaseOptions(model_asset_path='gesture_recognizer.task'),
+            running_mode=vision.RunningMode.LIVE_STREAM,
+            result_callback=self.callback
+        )
+        self.recognizer = vision.GestureRecognizer.create_from_options(options)
 
+    def callback(self, result, img, timestamp):
+        if result.gestures:
+            self.text = result.gestures[0][0].category_name
+        else:
+            self.text = 'None'
 
     def run(self):
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1920)
-
         for timestamp in count(1):
             ret, frame = self.cap.read()
             if not ret:
-                continue
-
+                return
             frame = cv2.flip(frame, 1)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-            recognizer.recognize_async(mp_image, timestamp)
-            cv2.putText(frame, result_text, (10, 40), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 255, 255), 1, cv2.LINE_AA)
-            # Reading the image in RGB to display it
-            color_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.recognizer.recognize_async(mp_image, timestamp)
 
-            # Creating and scaling QImage
-            h, w, ch = color_frame.shape
-            img = QImage(color_frame.data, w, h, ch * w, QImage.Format_RGB888)
-            scaled_img = img.scaled(640, 480, Qt.KeepAspectRatio)
+            cv2.putText(frame, self.text, (20, 20), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 255, 255))
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # Emit signal
-            self.updateFrame.emit(scaled_img)
-        sys.exit(-1)
+            h, w, c = frame.shape
+            qt_image = QImage(frame.data, w, h, c * w, QImage.Format.Format_RGB888)
+            qt_image = qt_image.scaled(640, 360, Qt.AspectRatioMode.KeepAspectRatio)
 
-class Game:
-    def __init__(self):
-        self.avaiable_types = ["Victory", "Closed_Fist", "Open_Palm"]
-    
-    def compare_winning(self, computer_index, player_index):
-        if computer_index == player_index:
-            return "tie"
-        elif computer_index == (player_index + 1) % 3:
-            return "computer win"
-        else:
-            return "you win"
+            self.signal.emit(qt_image, self.text)
 
 
-class Window(QMainWindow):
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Title and dimensions
-        self.setWindowTitle("Patterns detection")
-        self.setGeometry(0, 0, 800, 500)
+        self.setWindowTitle("AI猜猜拳")
+        self.setGeometry(0, 0, 1040, 520)
 
-        # Create a label for the display camera
-        self.label = QLabel(self)
-        self.label.setFixedSize(640, 480)
+        self._thread = Thread(self)
+        self._thread.signal.connect(self.update)
 
-        # Computer label for the display of computer gesture
-        self.computer_image_label = QLabel(self)
-        self.computer_image_label.setFixedSize(378, 503)
+        self.player = QLabel(self)
+        self.computer = QLabel(self)
+        img = QImage(f"resources/3.jpg")
+        img = img.scaled(360, 360, Qt.AspectRatioMode.KeepAspectRatio)
+        self.computer.setPixmap(QPixmap.fromImage(img))
+        
+        stream = QHBoxLayout()
+        stream.addWidget(self.player, alignment=Qt.AlignmentFlag.AlignLeft)
+        stream.addWidget(self.computer, alignment=Qt.AlignmentFlag.AlignRight)
 
-        image_layout = QHBoxLayout()
-        image_layout.addWidget(self.label)
-        image_layout.addWidget(self.computer_image_label)
+        self.text = QLabel("Loading...")
+        self.state = QLabel("Comparing")
+        self.count = QLabel("")
 
-        # Thread in charge of updating the image
-        self.th = Thread(self)
-        self.th.finished.connect(self.close)
-        self.th.updateFrame.connect(self.setImage)
+        self.btn_start = QPushButton("Start")
+        self.btn_finish = QPushButton("Finish")
 
-        # Buttons layout
-        buttons_layout = QHBoxLayout()
-        self.button1 = QPushButton("Start")
-        self.button2 = QPushButton("Stop/Close")
-        self.button1.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.button2.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        buttons_layout.addWidget(self.button2)
-        buttons_layout.addWidget(self.button1)
+        self.btn_finish.setEnabled(False)
 
-        right_layout = QHBoxLayout()
-        right_layout.addLayout(buttons_layout, 1)
+        self.btn_start.clicked.connect(self.start)
+        self.btn_finish.clicked.connect(self.finish)
 
-        # Main layout
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.btn_start)
+        buttons.addWidget(self.btn_finish)
+
         layout = QVBoxLayout()
-        layout.addLayout(image_layout)
-        layout.addLayout(right_layout)
-
-        # Central widget
+        layout.addLayout(stream)
+        layout.addWidget(self.text, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.state, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.count, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addLayout(buttons)
+        
         widget = QWidget(self)
         widget.setLayout(layout)
+
         self.setCentralWidget(widget)
 
-        # Connections
-        self.button1.clicked.connect(self.start)
-        self.button2.clicked.connect(self.kill_thread)
-        self.button2.setEnabled(False)
-
-        # Result Text
-        self.text = QLabel("result: ")
-        layout.addWidget(self.text, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        self.mylabel = QLabel('timer', self)
-        self.mylabel.move(60, 50)
-        layout.addWidget(self.mylabel, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # timer
-        self.counter = 5
-
-        self.mytimer = QTimer(self)
-        self.mytimer.timeout.connect(self.onTimer)
-        self.mytimer.start(1000)
-
-        # win/lose state
-        self.WinnerStateText = QLabel("comparing")
-        layout.addWidget(self.WinnerStateText, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        
+        self._thread.start()
 
     def onTimer(self):
         self.counter -= 1
-        self.mylabel.setText(str(self.counter))
+        self.count.setText(str(self.counter))
         if self.counter == 0:
-            self.counter = 5
-            computer_index = random.randint(0, 2)
-            img = QImage(f"computer_gesture/{computer_index}.HEIC")
-            scaled_img = img.scaled(640, 480, Qt.KeepAspectRatio)
-
-            # Set the QPixmap object as the image for the QLabel
-            self.computer_image_label.setPixmap(QPixmap.fromImage(scaled_img))
-
-            if result_text in Game().avaiable_types:
-                player_index = Game().avaiable_types.index(result_text)
-                self.WinnerStateText.setText(Game().compare_winning(computer_index=computer_index, player_index=player_index))
+            self.counter = 6
+            index = rd.randint(0, 2)
+            img = QImage(f"resources/{index}.jpg")
+            img = img.scaled(360, 360, Qt.AspectRatioMode.KeepAspectRatio)
+            self.computer.setPixmap(QPixmap.fromImage(img))
+            gesture = ["Victory", "Closed_Fist", "Open_Palm"]
+            if self._thread.text in gesture:
+                player_index = gesture.index(self._thread.text)
+                if index == player_index:
+                    res = "Tie"
+                elif index == (player_index + 1) % 3:
+                    res = "Computer wins"
+                else:
+                    res = "Human wins"
+                self.state.setText(res)
             else:
-                self.WinnerStateText.setText("Wrong Gesture")
-
-    @Slot()
-    def kill_thread(self):
-        print("Finishing...")
-        self.button2.setEnabled(False)
-        self.button1.setEnabled(True)
-        self.th.cap.release()
-        cv2.destroyAllWindows()
-        self.status = False
-        self.th.terminate()
-        # Give time for the thread to finish
-        time.sleep(1)
-
-    @Slot()
+                self.state.setText("Wrong Gesture")   
+   
     def start(self):
         print("Starting...")
-        self.button2.setEnabled(True)
-        self.button1.setEnabled(False)
-        # self.th.set_file(self.combobox.currentText())
-        self.th.start()
-
-    @Slot(QImage)
-    def setImage(self, image):
-        self.label.setPixmap(QPixmap.fromImage(image))
-        self.text.setText(result_text)
+        self.btn_start.setEnabled(False)
+        self.btn_finish.setEnabled(True)
+        self.counter = 6
+        self.mytimer = QTimer(self)
+        self.mytimer.timeout.connect(self.onTimer)
+        self.mytimer.start(1000)
     
+    def finish(self):
+        print("Finishing...")
+        self.btn_finish.setEnabled(False)
+        self._thread.cap.release()
+        self._thread.terminate()
+        app.exit()
 
+    @Slot(QImage, str)
+    def update(self, image, text):
+        self.player.setPixmap(QPixmap.fromImage(image))
+        self.text.setText(text)
 
 
 if __name__ == "__main__":
     app = QApplication()
-    w = Window()
-    w.show()
-    sys.exit(app.exec())
+    window = MainWindow()
+    window.show()
+    app.exec()
