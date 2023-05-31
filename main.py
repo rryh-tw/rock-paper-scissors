@@ -46,16 +46,19 @@ class Thread(QThread):
 
             h, w, c = frame.shape
             qt_image = QImage(frame.data, w, h, c * w, QImage.Format.Format_RGB888)
-            qt_image = qt_image.scaled(640, 360, Qt.AspectRatioMode.KeepAspectRatio)
+            
 
             self.signal.emit(qt_image, self.text)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        self.width = 1040
+        self.height = 520
+        self.winner_count = [0, 0]
         super().__init__()
         self.setWindowTitle("AI猜猜拳")
-        self.setGeometry(0, 0, 1040, 520)
+        self.setGeometry(0, 0, self.width, self.height)
 
         self._thread = Thread(self)
         self._thread.signal.connect(self.update)
@@ -63,16 +66,20 @@ class MainWindow(QMainWindow):
         self.player = QLabel(self)
         self.computer = QLabel(self)
         img = QImage(f"resources/3.jpg")
-        img = img.scaled(360, 360, Qt.AspectRatioMode.KeepAspectRatio)
+        img = img.scaled(self.width * 0.4, self.height * 0.7, Qt.AspectRatioMode.KeepAspectRatio)
         self.computer.setPixmap(QPixmap.fromImage(img))
-        
-        stream = QHBoxLayout()
-        stream.addWidget(self.player, alignment=Qt.AlignmentFlag.AlignLeft)
-        stream.addWidget(self.computer, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.text = QLabel("Loading...")
         self.state = QLabel("Comparing")
         self.count = QLabel("")
+        self.scoreboard = QLabel("0:0")
+        
+        stream = QHBoxLayout()
+        stream.addWidget(self.player, alignment=Qt.AlignmentFlag.AlignLeft)
+        stream.addWidget(self.scoreboard, alignment=Qt.AlignmentFlag.AlignCenter)
+        stream.addWidget(self.computer, alignment=Qt.AlignmentFlag.AlignRight)
+
+        
 
         self.btn_start = QPushButton("Start")
         self.btn_finish = QPushButton("Finish")
@@ -102,12 +109,19 @@ class MainWindow(QMainWindow):
 
     def onTimer(self):
         self.counter -= 1
-        self.count.setText(str(self.counter))
+        self.count.setText(str(max(0, self.counter//5)))
+
+        if self.counter // 5 > 2:
+            self.count.setStyleSheet("background-color: green; border: 1px solid black;")
+        elif self.counter // 5 > 0:
+            self.count.setStyleSheet("background-color: yellow; border: 1px solid black;")
+        else:
+            self.count.setStyleSheet("background-color: red; border: 1px solid black;")
+
         if self.counter == 0:
-            self.counter = 6
             index = rd.randint(0, 2)
             img = QImage(f"resources/{index}.jpg")
-            img = img.scaled(360, 360, Qt.AspectRatioMode.KeepAspectRatio)
+            img = img.scaled(self.width * 0.4, self.height * 0.7, Qt.AspectRatioMode.KeepAspectRatio)
             self.computer.setPixmap(QPixmap.fromImage(img))
             gesture = ["Victory", "Closed_Fist", "Open_Palm"]
             if self._thread.text in gesture:
@@ -116,20 +130,31 @@ class MainWindow(QMainWindow):
                     res = "Tie"
                 elif index == (player_index + 1) % 3:
                     res = "Computer wins"
+                    self.winner_count[1] += 1
                 else:
                     res = "Human wins"
+                    self.winner_count[0] += 1
                 self.state.setText(res)
+                self.scoreboard.setText(f'{self.winner_count[0]}:{self.winner_count[1]}')
             else:
                 self.state.setText("Wrong Gesture")   
+        elif self.counter < 0:
+            if self.counter == -10:
+                self.counter = 25
+                self.state.setText("comparing")
+        else:
+            img = QImage(f"resources/{self.counter % 3}.jpg")
+            img = img.scaled(self.width * 0.4, self.height * 0.7, Qt.AspectRatioMode.KeepAspectRatio)
+            self.computer.setPixmap(QPixmap.fromImage(img))
    
     def start(self):
         print("Starting...")
         self.btn_start.setEnabled(False)
         self.btn_finish.setEnabled(True)
-        self.counter = 6
+        self.counter = 25
         self.mytimer = QTimer(self)
         self.mytimer.timeout.connect(self.onTimer)
-        self.mytimer.start(1000)
+        self.mytimer.start(200)
     
     def finish(self):
         print("Finishing...")
@@ -140,6 +165,7 @@ class MainWindow(QMainWindow):
 
     @Slot(QImage, str)
     def update(self, image, text):
+        image = image.scaled(self.width * 0.4, self.height * 0.7, Qt.AspectRatioMode.KeepAspectRatio)
         self.player.setPixmap(QPixmap.fromImage(image))
         self.text.setText(text)
 
